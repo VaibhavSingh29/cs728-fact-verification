@@ -1,0 +1,6 @@
+__pycache__/
+data/
+indexes/
+runs/
+*.ipynb
+*.txt
