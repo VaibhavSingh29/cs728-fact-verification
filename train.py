@@ -1,10 +1,15 @@
 import argparse
+import logging
 import random
 import numpy as np
 import os
 import torch
+import warnings
 from dataclasses import dataclass
 from experiment import Experiment
+
+logging.getLogger("transformers").setLevel(logging.ERROR)
+warnings.filterwarnings('ignore', category=UserWarning, message='TypedStorage is deprecated')
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--train_nli', action='store_true')
@@ -50,7 +55,7 @@ class TrainingParams:
     lr: float = 1e-5
     log_dir: str = './logs/trial/'
     device: str = 'cuda:1'
-    es_step: int = 5
+    es_step: int = 1
     exp_name: str = 'trial'
 
 def set_seed(seed):
@@ -63,6 +68,7 @@ def set_seed(seed):
 
 if __name__ == '__main__':
     args = parser.parse_args()
+    assert (args.train_retriever ^ args.train_nli), f'Can train only one at a time!'
 
 
     if args.train_retriever:
@@ -73,9 +79,6 @@ if __name__ == '__main__':
         exp = Experiment(retriever_loader_params, training_params, retriever_exp=True)
         
         exp.train()
-
-        print('Retriever Training Done!')
-
     
     if args.train_nli:
         nli_loader_params = NLILoaderParams()
@@ -85,8 +88,3 @@ if __name__ == '__main__':
         exp = Experiment(nli_loader_params, training_params, retriever_exp=False)
 
         exp.train()
-
-        print('NLI Training Done!')
-
-     
-

@@ -1,8 +1,12 @@
+import logging
 import numpy as np
 import os
 import torch
 import torch.optim as optim
 import transformers
+from accelerate import Accelerator
+from accelerate.logging import get_logger
+from accelerate.utils import gather, gather_object, tqdm
 from itertools import chain
 from loader import FeverDataset, NLICollate, RetrieverDataset, RetrieverCollate
 from dpr import DPR
@@ -11,13 +15,14 @@ from sklearn.metrics import f1_score
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import LinearLR
 from torch.utils.tensorboard import SummaryWriter
-from tqdm import tqdm
 
 class Experiment():
     def __init__(self, loader_params, training_params, retriever_exp=False) -> None:
         self.training_params = training_params
-        self.device = self.training_params.device
         self.retriever_exp = retriever_exp
+
+        self.accelerator = Accelerator()
+        self.device = self.accelerator.device
 
         if retriever_exp:
             collate_fn = RetrieverCollate()
@@ -29,6 +34,8 @@ class Experiment():
             self.optimizer = optim.Adam(self.dpr.parameters(), lr=training_params.lr)
             self.update_log = self.update_retriever_log
 
+            self.train_loader, self.val_loader, self.dpr, self.optimizer = self.accelerator.prepare(self.train_loader, self.val_loader, self.dpr, self.optimizer)
+
             
         else:
             collate_fn = NLICollate(loader_params)
@@ -39,12 +46,15 @@ class Experiment():
             self.nli = NLI().to(self.device)
             self.optimizer = optim.AdamW(self.nli.parameters(), lr=training_params.lr)
             self.update_log = self.update_nli_log
+
+            self.train_loader, self.val_loader, self.nli, self.optimizer = self.accelerator.prepare(self.train_loader, self.val_loader, self.nli, self.optimizer)
         
         
           
         
             # self.scheduler = LinearLR(self.optimizer, start_factor=0.5, total_iters=)
-
+        self.logger = get_logger(__name__)
+        logging.basicConfig(level=logging.DEBUG)
         self.writer = SummaryWriter(os.path.join('runs', training_params.exp_name, 'retriever_logs' if retriever_exp else 'nli_logs'))
 
     def train(self):
@@ -61,7 +71,7 @@ class Experiment():
                             loss = self.dpr(batch)
                         else:
                             loss = self.nli(batch)
-                        loss.backward()
+                        self.accelerator.backward(loss)
                         self.optimizer.step()
                         self.writer.add_scalar('train_loss', loss.item(), epoch*len(self.train_loader) + i)
                         epoch_loss += loss.item()
@@ -95,19 +105,25 @@ class Experiment():
         true = []
         predicted = []
         self.nli.eval()
-        with tqdm(total=len(self.val_loader), desc='Validation Progress', leave=False) as pbar:
-            with torch.no_grad():
+        with tqdm(total=len(self.val_loader), desc='Validation Progress', leave=False) as val_pbar:
                 for batch in self.val_loader:
                     true.extend(batch['label'].tolist())
                     self._to_device(batch)
-                    preds = self.nli.predict(batch)
+                    with torch.no_grad():
+                        preds = self.nli.predict(batch)
                     predicted.extend(preds.tolist())
-        micro_f1 = f1_score(true, predicted, average='micro')
+                    val_pbar.update(1)
+        gathered = gather_object((true, predicted))
+        all_true = list(chain.from_iterable(gathered[::2]))
+        all_predicted = list(chain.from_iterable(gathered[1::2]))
+
+        assert len(all_true) == len(all_predicted)
+        micro_f1 = f1_score(all_true, all_predicted, average='micro')
         return micro_f1      
     
     def validate_retriever(self):
-        total_rr = 0
-        relevant_docs = 0
+        total_rr = torch.zeros(1).to(self.device)
+        relevant_docs = torch.zeros(1).to(self.device)
         self.dpr.eval()
         with tqdm(total=len(self.val_loader), desc='Validation Progress', leave=False) as pbar:
             with torch.no_grad():
@@ -119,6 +135,9 @@ class Experiment():
                     relevant_docs += num_docs
                     pbar.set_postfix({'running MRR': total_rr / relevant_docs})
                     pbar.update(1)
+        total_rr, relevant_docs = gather((total_rr, relevant_docs))
+        total_rr = total_rr.sum()
+        relevant_docs = relevant_docs.sum()
         mrr = total_rr / relevant_docs
         return mrr.item()
     
@@ -131,11 +150,6 @@ class Experiment():
             evidence = batch['doc_sent_id_mapping'][inst]
             scores = sim_score[inst][:num_sentences[inst]]
             rank_ids = torch.argsort(scores, descending=True)
-            # print(evidence)
-            # print(gold_evidence)
-            # print(rank_ids)
-            # print(num_sentences)
-            # print(scores)
             relevant = [
                 evidence[i] in gold_evidence for i in rank_ids
             ]
@@ -173,4 +187,4 @@ class Experiment():
                 batch[key]['attention_mask'] = batch[key]['attention_mask'].to(self.device)
 
     def save(self, model, path):
-        torch.save(model.state_dict(), path)
+        self.accelerator.save(model.state_dict(), path)

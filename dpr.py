@@ -56,10 +56,8 @@ class DPR(nn.Module):
         for i in num_sentences:
             evidence_per_claim.append(encoded_evidence[left_idx:left_idx+i])
             left_idx += i
-        print([e.shape for e in evidence_per_claim])
         evidence_per_claim = pad_sequence(evidence_per_claim, batch_first=True) # bsz x max_sent x 768
 
-        print(encoded_claim.shape, evidence_per_claim.shape)
         sim_score = torch.bmm(encoded_claim, evidence_per_claim.transpose(1, 2)).squeeze(1)
         sim_score = sim_score.masked_fill_(
             mask=~mask.squeeze(),
@@ -68,7 +66,6 @@ class DPR(nn.Module):
         return sim_score
     
     def topk(self, batch, k=10):
-        print(batch['claim']['attention_mask'].shape, batch['evidence']['attention_mask'].shape)
         sim_score = self.predict(batch)
         num_sentences = batch['mask'].sum(dim=1).type(torch.int).tolist()
         topk = []
@@ -77,7 +74,7 @@ class DPR(nn.Module):
             scores = sim_score[inst][:num_sentences[inst]]
             rank_ids = torch.argsort(scores, descending=True)
             relevant = [
-                evidence[i] for i in rank_ids if i < k
-            ]
+                evidence[i] for i in rank_ids
+            ][:k]
             topk.append(relevant)
         return topk

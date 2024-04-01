@@ -17,13 +17,13 @@ class FeverDataset(Dataset):
         self.max_sent_per_doc = params.max_sent_per_doc
         if self.type == 'train':
             with open('./data/train.jsonl', 'r', encoding='utf-8') as f:
-                self.data = [json.loads(line) for line in f][:16]
+                self.data = [json.loads(line) for line in f]
         elif self.type == 'val':
             with open('./data/shared_task_dev.jsonl', 'r', encoding='utf-8') as f:
-                self.data = [json.loads(line) for line in f][:16]
+                self.data = [json.loads(line) for line in f]
         elif self.type == 'test':
             with open('./data/shared_task_test.jsonl', 'r', encoding='utf-8') as f:        
-                self.data = [json.loads(line) for line in f][:16]
+                self.data = [json.loads(line) for line in f]
         else:
             raise ValueError(f'Wrong dset type: {self.type}')
 
@@ -85,7 +85,8 @@ class FeverDataset(Dataset):
                 mapping.append((docid, sentid))
         return {
             'doc_sent_id_mapping': mapping,
-            'sentences': sentences
+            'sentences': sentences,
+            'gold_evidence': gold_evidence,
         }
     
     def __len__(self):
@@ -179,7 +180,7 @@ class NLICollate():
         for i, sent in enumerate(batch_sentences):
             print(f'{i}: {sent}')
         print("==================================================")
-        return batch_sentences
+        return batch_sentences, batch_topk
 
     def __call__(self, batch):
         claim = [
@@ -191,8 +192,10 @@ class NLICollate():
             ]
             input = self.tokenize_batch(claim, sentences)
         else:
-            sentences = self.retrieve_evidence(claim)
+            sentences, batch_topk = self.retrieve_evidence(claim)
             input = self.tokenize_batch(claim, sentences)
+            processed_batch['retrieved_evidence'] = batch_topk
+            
 
         processed_batch = {}
         processed_batch['tokenized_claim_evidence'] = input
@@ -207,6 +210,10 @@ class NLICollate():
 
         if 'gold_evidence' in batch[0]:
             processed_batch['gold_evidence'] = [
+                instance['gold_evidence'] for instance in batch
+            ]
+        if 'doc_sent_id_mapping' in batch[0]:
+            processed_batch['doc_sent_id_mapping'] = [
                 instance['doc_sent_id_mapping'] for instance in batch
             ]
 
@@ -227,14 +234,14 @@ class RetrieverDataset(Dataset):
         self.num_positives = params.num_positives
         self.num_negatives = params.num_negatives
         self.num_docs_to_retrieve = params.num_docs_to_retrieve
-        self.max_sent_per_document = params.max_sent_per_doc
+        self.max_sent_per_doc = params.max_sent_per_doc
 
         if self.type == 'train':
             with open('./data/train.jsonl', 'r', encoding='utf-8') as f:
-                self.data = [json.loads(line) for line in f][:16]
+                self.data = [json.loads(line) for line in f]
         elif self.type == 'val':
             with open('./data/shared_task_dev.jsonl', 'r', encoding='utf-8') as f:
-                self.data = [json.loads(line) for line in f][:100]
+                self.data = [json.loads(line) for line in f]
         else:
             raise ValueError(f'Wrong dset type: {self.type}')
     
@@ -309,7 +316,7 @@ class RetrieverDataset(Dataset):
             added_sents = 0
             for i, sent in enumerate(doc['sentences']):
                 if sent == '': continue
-                if added_sents >= self.max_sent_per_document: break
+                if added_sents >= self.max_sent_per_doc: break
                 added_sents += 1
                 mapping.append((docid, i))
                 relevance.append(i in sentids)
@@ -325,7 +332,6 @@ class RetrieverDataset(Dataset):
         used_docids = set([mapping[0] for mapping in gold_evidence['doc_sent_id_mapping']])
 
         negatives = []
-        added = 0
         hits = self.searcher.search(claim, self.num_negatives)
         for hit in hits:
             if hit.docid not in used_docids:
@@ -333,7 +339,7 @@ class RetrieverDataset(Dataset):
                 added_sents = 0 
                 for i, sent in enumerate(doc['sentences']):
                     if sent == '': continue
-                    if added_sents >= self.max_sent_per_document: break
+                    if added_sents >= self.max_sent_per_doc: break
                     added_sents += 1
                     gold_evidence['doc_sent_id_mapping'].append((hit.docid, i))
                     negatives.append(sent)
@@ -349,18 +355,19 @@ class RetrieverDataset(Dataset):
         sentences = []
         for hit in hits:
             doc = json.loads(self.searcher.doc(hit.docid).raw())
-            all_sents = doc['sentences'][:self.max_sent_per_document]
-            mapping.extend(
-                [(hit.docid, i) for i in range(len(all_sents))]
-            )
-            sentences.extend(all_sents)
+            added_sents = 0
+            for sentid, sent in enumerate(doc['sentences']):
+                if sent == '': continue
+                if added_sents >= self.max_sent_per_doc: break
+                added_sents += 1
+                mapping.append((hit.docid, sentid))
+                sentences.append(sent)
         assert len(mapping) == len(sentences)
         return {
             'doc_sent_id_mapping': mapping,
             'evidence': sentences
         }
 
-    
     def __len__(self):
         return len(self.data)
     
