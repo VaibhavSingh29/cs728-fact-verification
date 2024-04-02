@@ -1,11 +1,12 @@
 import argparse
+import json
 import logging
 import os
 import torch
+import transformers
 import warnings
 from dataclasses import dataclass
 from fever.scorer import fever_score
-import json
 from loader import FeverDataset, NLICollate
 from nli import NLI
 from pprint import pprint
@@ -19,15 +20,19 @@ parser.add_argument('--test_only', action='store_true')
 logging.getLogger("transformers").setLevel(logging.ERROR)
 warnings.filterwarnings('ignore', category=UserWarning, message='TypedStorage is deprecated')
 
-@dataclass
-class EvalParams():
-    exp_name: str = 'runs/trial/'
-    bsz: int = 4
+def _to_device(batch, device):
+    for key in batch:
+        if type(batch[key]) == torch.Tensor:
+            batch[key] = batch[key].to(device)
+        if type(batch[key]) == transformers.tokenization_utils_base.BatchEncoding:
+            batch[key]['input_ids'] = batch[key]['input_ids'].to(device)
+            batch[key]['attention_mask'] = batch[key]['attention_mask'].to(device)
 
 def evaluate(loader, fever_ds, params, is_test=False):
     instances = []
     with tqdm(total=len(loader), desc='Evaluating: ') as pbar:
         for batch in loader:
+            _to_device(batch, eval_params.device)
             predicted_label = [fever_ds.id_to_label[id] for id in nli.predict(batch).tolist()]
             predicted_evidence = batch['retrieved_evidence']
             if not is_test:
@@ -72,17 +77,23 @@ def evaluate(loader, fever_ds, params, is_test=False):
         for instance in instances:
             file.write(json.dumps(instance) + '\n')
 
+@dataclass
+class EvalParams():
+    exp_name: str = 'runs/bm25_dpr_gpt2/'
+    bsz: int = 32
+    device: str = 'cuda:3'
 
 if __name__ == '__main__':
     args = parser.parse_args()
     eval_params = EvalParams()
     loader_params = NLILoaderParams(
         dataset_type='val',
-        num_docs_to_use=4,
-        max_sent_per_doc=2,
+        num_docs_to_use=8,
+        max_sent_per_doc=8,
         use_gold_as_evidence=False,
+        max_evidence_to_retrieve=16,
         dpr_model_path=os.path.join(eval_params.exp_name, 'retriever/dpr_final.pth'),
-        device='cuda:1',
+        device='cuda:2',
     )
 
     # load dataset
@@ -96,11 +107,13 @@ if __name__ == '__main__':
     test_loader = DataLoader(fever_test, batch_size=eval_params.bsz, collate_fn=collate_fn, shuffle=False)
 
     # NLI model
-    nli = NLI()
+    nli = NLI().to(eval_params.device)
     nli.load_state_dict(torch.load(os.path.join(eval_params.exp_name, 'nli/nli_final.pth')))
 
     if not args.test_only: 
+        print('=============================== VALIDATION ===============================')
         evaluate(val_loader, fever_val, eval_params, is_test=False)
+        print('=============================== TEST ===============================')
     evaluate(test_loader, fever_test, eval_params, is_test=True)
 
     

@@ -99,7 +99,7 @@ class NLICollate():
         self.num_docs_to_use = params.num_docs_to_use
         self.max_sent_per_doc = params.max_sent_per_doc
         self.max_evidence_length = params.max_evidence_length
-        self.max_docs_to_retrieve = params.max_docs_to_retrieve
+        self.max_evidence_to_retrieve = params.max_evidence_to_retrieve
         if not self.use_gold_as_evidence:
             self.first_stage_retriever = LuceneSearcher('indexes/wiki-pages')
             
@@ -144,10 +144,10 @@ class NLICollate():
 
         mapping = []
         sentences = []
-        print('CLAIMS: ')
-        for i, c in enumerate(claim):
-            print(f'{i}: {c}')
-        print('========================================')
+        # print('CLAIMS: ')
+        # for i, c in enumerate(claim):
+        #     print(f'{i}: {c}')
+        # print('========================================')
         for hits in batch_hits.values():
             claim_map = []
             claim_sents = []
@@ -162,25 +162,23 @@ class NLICollate():
                         claim_sents.append(sent)
             sentences.append(claim_sents)
             mapping.append(claim_map)
-        print('Sentences: ')
-        for i,s in enumerate(sentences):
-            print(f'{i}: {s}')
-        print("==========================================")
+        # print('Sentences: ')
+        # for i,s in enumerate(sentences):
+        #     print(f'{i}: {s}')
+        # print("==========================================")
 
 
         claim, evidence = self.tokenize_retriever_batch(claim, sentences)
-        print(claim['input_ids'].shape)
         mask = pad_sequence(
             [torch.ones(len(inst)).unsqueeze(1) for inst in mapping], batch_first=True, padding_value=0.0
         ).squeeze(-1).type(torch.bool)
-        print("MASK: ", mask.shape)
 
         batch_topk = self.second_stage_retriever.topk(batch={
                 'claim': {k:v.to(self.device) for k, v in claim.items()},
                 'evidence': {k:v.to(self.device) for k,v in evidence.items()},
                 'doc_sent_id_mapping': mapping,
                 'mask': mask.to(self.device)
-            }, k=self.max_docs_to_retrieve)
+            }, k=self.max_evidence_to_retrieve)
 
         batch_sentences = []
         for topk in batch_topk:
@@ -189,10 +187,10 @@ class NLICollate():
                 doc = json.loads(self.first_stage_retriever.doc(docid).raw())
                 sentences.append(doc['sentences'][sentid])
             batch_sentences.append(sentences)
-        print('RETRIEVED EVIDENCE')
-        for i, sent in enumerate(batch_sentences):
-            print(f'{i}: {sent}')
-        print("==================================================")
+        # print('RETRIEVED EVIDENCE')
+        # for i, sent in enumerate(batch_sentences):
+        #     print(f'{i}: {sent}')
+        # print("==================================================")
         return batch_sentences, batch_topk
 
     def __call__(self, batch):

@@ -23,6 +23,7 @@ class RetrieverLoaderParams:
     num_docs_to_retrieve: int = 8
     max_sent_per_doc: int = 8
 
+@dataclass
 class NLILoaderParams:
     dataset_type: str = 'train'
     num_docs_to_use: int = 8
@@ -30,7 +31,7 @@ class NLILoaderParams:
     max_evidence_length: int = 64
     use_gold_as_evidence: bool = True
     dpr_model_path: str = ''
-    max_docs_to_retrieve: int = 10
+    max_evidence_to_retrieve: int = 10
     device: str = 'cuda:0'
 
 
