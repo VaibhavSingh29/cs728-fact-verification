@@ -11,6 +11,8 @@ To train the retriever: `accelerate launch train.py --train_retriever`
 
 To train the NLI model (GPT2): `accelerate launch train.py --train_nli`
 
+To evaluate: `python eval.py`
+
 To create environment:
 
 * install latest version of transformers, pytorch 
