@@ -54,6 +54,7 @@ class FeverDataset(Dataset):
         return {
             'claim': claim,
             'label': label,
+            'gold_evidence_original': instance['evidence'],
             **evidence
         }
     
@@ -86,7 +87,7 @@ class FeverDataset(Dataset):
         return {
             'doc_sent_id_mapping': mapping,
             'sentences': sentences,
-            'gold_evidence': gold_evidence,
+            'gold_evidence_dict': gold_evidence,
         }
     
     def __len__(self):
@@ -195,6 +196,7 @@ class NLICollate():
         return batch_sentences, batch_topk
 
     def __call__(self, batch):
+        processed_batch = {}
         claim = [
             inst['claim'] for inst in batch
         ]
@@ -208,8 +210,6 @@ class NLICollate():
             input = self.tokenize_batch(claim, sentences)
             processed_batch['retrieved_evidence'] = batch_topk
             
-
-        processed_batch = {}
         processed_batch['tokenized_claim_evidence'] = input
 
         if 'label' in batch[0]:
@@ -220,13 +220,17 @@ class NLICollate():
                     list(map(lambda inst: torch.Tensor(inst['label']).unsqueeze(0), batch)), dim=0
                 )
 
-        if 'gold_evidence' in batch[0]:
-            processed_batch['gold_evidence'] = [
-                instance['gold_evidence'] for instance in batch
+        if 'gold_evidence_dict' in batch[0]:
+            processed_batch['gold_evidence_dict'] = [
+                instance['gold_evidence_dict'] for instance in batch
             ]
         if 'doc_sent_id_mapping' in batch[0]:
             processed_batch['doc_sent_id_mapping'] = [
                 instance['doc_sent_id_mapping'] for instance in batch
+            ]
+        if 'gold_evidence_original' in batch[0]:
+            processed_batch['gold_evidence_original'] = [
+                instance['gold_evidence_original'] for instance in batch
             ]
 
         return processed_batch

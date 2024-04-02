@@ -31,6 +31,7 @@ class NLILoaderParams:
     use_gold_as_evidence: bool = True
     dpr_model_path: str = ''
     max_docs_to_retrieve: int = 10
+    device: str = 'cuda:0'
 
 
 # @dataclass
