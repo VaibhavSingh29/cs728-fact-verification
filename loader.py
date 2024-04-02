@@ -97,6 +97,8 @@ class NLICollate():
         self.use_gold_as_evidence = params.use_gold_as_evidence
         self.num_docs_to_use = params.num_docs_to_use
         self.max_sent_per_doc = params.max_sent_per_doc
+        self.max_evidence_length = params.max_evidence_length
+        self.max_docs_to_retrieve = params.max_docs_to_retrieve
         if not self.use_gold_as_evidence:
             self.first_stage_retriever = LuceneSearcher('indexes/wiki-pages')
             
@@ -114,15 +116,25 @@ class NLICollate():
             'max_length': 64
         }
 
+        # self.truncate_evidence = lambda x: self.tokenizer.decode(self.tokenizer(x, add_special_tokens=True)[:self.max_evidence_length])
+
+    def truncate_evidence(self, evidence: str):
+        encoded_evidence = self.tokenizer.encode(evidence, add_special_tokens=True, max_length=self.max_evidence_length)
+        decoded_evidence = self.tokenizer.decode(encoded_evidence)
+        return decoded_evidence
+
+
     def tokenize_batch(self, claim, evidence):
         input_strs = []
         for i in range(len(claim)):
-            input_str = "[CLS] claim_token " + claim[i] + "".join([ f" evidence_token {e}" for e in evidence[i]]) + " [SEP]"
+            truncated_evidence = list(map(self.truncate_evidence, [ f" evidence_token {e}" for e in evidence[i]]))
+            input_str = "[CLS] claim_token " + claim[i] + "".join(truncated_evidence) + " [SEP]"
 
             input_strs.append(input_str)
 
         return self.tokenizer.batch_encode_plus(
             input_strs,
+            add_special_tokens=True,
             **self.tokenizer_config
         )
     
@@ -167,7 +179,7 @@ class NLICollate():
                 'evidence': {k:v.to(self.device) for k,v in evidence.items()},
                 'doc_sent_id_mapping': mapping,
                 'mask': mask.to(self.device)
-            }, k=10)
+            }, k=self.max_docs_to_retrieve)
 
         batch_sentences = []
         for topk in batch_topk:
