@@ -17,3 +17,6 @@ To create environment:
 * install tensorboard
 * install faiss-cpu, pyserini 
     [**Note**: We encountered an error when installing pyserini due to the package nmslib. Highly recommending to run: `conda install -c conda-forge nmslib -y` before installing pyserini]
+* To install fever-scorer: 
+    `pip install setuptools==56.1.0`
+    `pip install fever-scorer`
