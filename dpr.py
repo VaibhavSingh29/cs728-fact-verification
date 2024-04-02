@@ -40,6 +40,7 @@ class DPR(nn.Module):
         evidence = batch['evidence']
         mask = batch['mask']
         num_sentences = mask.sum(dim=1).type(torch.int).squeeze().tolist()
+        if type(num_sentences) == int: num_sentences = [num_sentences]
         
         encoded_claim = self.project_claim(
             self.claim_encoder(**claim).pooler_output
