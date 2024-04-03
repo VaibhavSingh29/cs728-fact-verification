@@ -2,8 +2,9 @@ from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from pyserini.search.lucene import LuceneSearcher, querybuilder
 from typing import List
-class SparseRetriever():
+class SparseRetriever(LuceneSearcher):
     def __init__(self) -> None:
+        super().__init__('indexes/wiki-pages-ner')
         self.searcher = LuceneSearcher('indexes/wiki-pages-ner')
         self.stop_words = set(stopwords.words('english'))
 
