@@ -1,5 +1,7 @@
 import json
 import numpy as np
+import os
+import pickle
 import torch
 import unicodedata
 from dataclasses import dataclass
@@ -15,14 +17,15 @@ class FeverDataset(Dataset):
         self.type = params.dataset_type
         self.num_docs_to_use = params.num_docs_to_use
         self.max_sent_per_doc = params.max_sent_per_doc
+        self.max_evidence_to_retrieve = params.max_evidence_to_retrieve
         if self.type == 'train':
-            with open('./data/train.jsonl', 'r', encoding='utf-8') as f:
+            with open('./data/fever/train.jsonl', 'r', encoding='utf-8') as f:
                 self.data = [json.loads(line) for line in f]
         elif self.type == 'val':
-            with open('./data/shared_task_dev.jsonl', 'r', encoding='utf-8') as f:
+            with open('./data/fever_ner/shared_task_dev.jsonl', 'r', encoding='utf-8') as f:
                 self.data = [json.loads(line) for line in f]
         elif self.type == 'test':
-            with open('./data/shared_task_test.jsonl', 'r', encoding='utf-8') as f:        
+            with open('./data/fever_ner/shared_task_test.jsonl', 'r', encoding='utf-8') as f:        
                 self.data = [json.loads(line) for line in f]
         else:
             raise ValueError(f'Wrong dset type: {self.type}')
@@ -41,7 +44,7 @@ class FeverDataset(Dataset):
 
         if self.type == 'test':
             return {
-                'claim': claim
+                'claim': claim,
             }
         
         if self.type == 'val':
@@ -49,7 +52,11 @@ class FeverDataset(Dataset):
         elif self.type == 'train':
             label = np.zeros(3)
             label[self.label_to_id[instance['label']]] = 1
-        evidence = self.get_evidence(instance['evidence'])
+        
+        if instance['label'] == 'NOT ENOUGH INFO':
+            evidence = self.retrieve_evidence(claim)
+        else:
+            evidence = self.get_evidence(claim, instance['evidence'])
     
         return {
             'claim': claim,
@@ -58,7 +65,23 @@ class FeverDataset(Dataset):
             **evidence
         }
     
-    def get_evidence(self, evidence_data):
+    def retrieve_evidence(self, claim):
+        hits = self.searcher.search(claim, k=self.num_docs_to_use)
+        mapping = []
+        sentences = []
+        for hit in hits:
+            doc = json.loads(self.searcher.doc(hit.docid).raw())
+            for i, sentence in enumerate(doc['sentences']):
+                if sentence != '':
+                    sentences.append(sentence)
+                    mapping.append((hit.docid, i))
+        return {
+            'doc_sent_id_mapping': mapping[:self.max_evidence_to_retrieve],
+            'sentences': sentences[:self.max_evidence_to_retrieve],
+            'gold_evidence_dict': {},
+        }
+
+    def get_evidence(self, claim, evidence_data):
         fetch = lambda x: (x[2], x[3])
 
         gold_evidence = {}
@@ -84,6 +107,13 @@ class FeverDataset(Dataset):
                 doc = json.loads(doc.raw())
                 sentences.append(doc['sentences'][sentid])
                 mapping.append((docid, sentid))
+
+        if len(sentences) < self.max_evidence_to_retrieve:
+            added = len(sentences)
+            retrieved = self.retrieve_evidence(claim)
+            sentences.extend(retrieved['sentences'][:(self.max_evidence_to_retrieve - added)])
+            mapping.extend(retrieved['doc_sent_id_mapping'][:(self.max_evidence_to_retrieve - added)])
+
         return {
             'doc_sent_id_mapping': mapping,
             'sentences': sentences,
@@ -100,9 +130,9 @@ class NLICollate():
         self.max_sent_per_doc = params.max_sent_per_doc
         self.max_evidence_length = params.max_evidence_length
         self.max_evidence_to_retrieve = params.max_evidence_to_retrieve
+        self.truncate_evidence = params.truncate_evidence
         if not self.use_gold_as_evidence:
-            self.first_stage_retriever = LuceneSearcher('indexes/wiki-pages')
-            
+            self.first_stage_retriever = LuceneSearcher('indexes/wiki-pages')              
             self.second_stage_retriever = DPR().to(params.device)
             self.second_stage_retriever.load_state_dict(torch.load(params.dpr_model_path))
             self.tokenize_retriever_batch = RetrieverCollate().tokenize_batch
@@ -110,16 +140,16 @@ class NLICollate():
 
         self.tokenizer = AutoTokenizer.from_pretrained("microsoft/DialogRPT-updown")
         self.tokenizer_config = {
-            'padding': 'max_length',
+            'padding': True,
             'truncation': True,
+            'max_length': 512,
             'return_attention_mask': True,
-            'return_tensors': 'pt',
-            'max_length': 64
+            'return_tensors': 'pt'
         }
 
         # self.truncate_evidence = lambda x: self.tokenizer.decode(self.tokenizer(x, add_special_tokens=True)[:self.max_evidence_length])
 
-    def truncate_evidence(self, evidence: str):
+    def truncate(self, evidence: str):
         encoded_evidence = self.tokenizer.encode(evidence, add_special_tokens=True, max_length=self.max_evidence_length)
         decoded_evidence = self.tokenizer.decode(encoded_evidence)
         return decoded_evidence
@@ -128,16 +158,18 @@ class NLICollate():
     def tokenize_batch(self, claim, evidence):
         input_strs = []
         for i in range(len(claim)):
-            truncated_evidence = list(map(self.truncate_evidence, [ f" evidence_token {e}" for e in evidence[i]]))
-            input_str = "[CLS] claim_token " + claim[i] + "".join(truncated_evidence) + " [SEP]"
+            if self.truncate_evidence:
+                sentences = list(map(self.truncate, [ f" evidence_token {e}" for e in evidence[i]]))
+            else:
+                sentences = [ f" evidence_token {e}" for e in evidence[i]]
+            input_str = "[CLS] claim_token " + claim[i] + "".join(sentences) + " [SEP]"
 
             input_strs.append(input_str)
-
-        return self.tokenizer.batch_encode_plus(
+        inputs =  self.tokenizer.batch_encode_plus(
             input_strs,
-            add_special_tokens=True,
             **self.tokenizer_config
         )
+        return inputs
     
     def retrieve_evidence(self, claim):
         batch_hits = self.first_stage_retriever.batch_search(queries=claim, qids=[str(i) for i in range(len(claim))], k=self.num_docs_to_use)
@@ -173,7 +205,8 @@ class NLICollate():
             [torch.ones(len(inst)).unsqueeze(1) for inst in mapping], batch_first=True, padding_value=0.0
         ).squeeze(-1).type(torch.bool)
 
-        batch_topk = self.second_stage_retriever.topk(batch={
+        with torch.no_grad():
+            batch_topk = self.second_stage_retriever.topk(batch={
                 'claim': {k:v.to(self.device) for k, v in claim.items()},
                 'evidence': {k:v.to(self.device) for k,v in evidence.items()},
                 'doc_sent_id_mapping': mapping,
@@ -202,13 +235,13 @@ class NLICollate():
             sentences = [
                 inst['sentences'] for inst in batch
             ]
-            input = self.tokenize_batch(claim, sentences)
+            tokenized_input = self.tokenize_batch(claim, sentences)
         else:
             sentences, batch_topk = self.retrieve_evidence(claim)
-            input = self.tokenize_batch(claim, sentences)
+            tokenized_input = self.tokenize_batch(claim, sentences)
             processed_batch['retrieved_evidence'] = batch_topk
             
-        processed_batch['tokenized_claim_evidence'] = input
+        processed_batch['tokenized_claim_evidence'] = tokenized_input
 
         if 'label' in batch[0]:
             if type(batch[0]['label']) == int:
@@ -251,10 +284,10 @@ class RetrieverDataset(Dataset):
         self.max_sent_per_doc = params.max_sent_per_doc
 
         if self.type == 'train':
-            with open('./data/train.jsonl', 'r', encoding='utf-8') as f:
+            with open('./data/fever/train.jsonl', 'r', encoding='utf-8') as f:
                 self.data = [json.loads(line) for line in f]
         elif self.type == 'val':
-            with open('./data/shared_task_dev.jsonl', 'r', encoding='utf-8') as f:
+            with open('./data/fever_ner/shared_task_dev.jsonl', 'r', encoding='utf-8') as f:
                 self.data = [json.loads(line) for line in f]
         else:
             raise ValueError(f'Wrong dset type: {self.type}')
@@ -498,13 +531,17 @@ if __name__ == '__main__':
     #     if i > 4:
     #         break
 
+    @dataclass
     class NLILoaderParams:
         dataset_type: str = 'train'
         num_docs_to_use: int = 4
-        max_sent_per_doc: int = 2
-        use_gold_as_evidence: bool = False
-        dpr_model_path: str = 'runs/trial/retriever/dpr_final.pth'
-        device: str = 'cuda:1'
+        max_sent_per_doc: int = 4
+        max_evidence_length: int = 64
+        use_gold_as_evidence: bool = True
+        dpr_model_path: str = './runs/bm25_dpr_gpt2/retriever/dpr_final.pth'
+        max_evidence_to_retrieve: int = 5
+        truncate_evidence: bool = False
+        device: str = 'cuda:6'
 
     params = NLILoaderParams()
     from torch.utils.data import DataLoader

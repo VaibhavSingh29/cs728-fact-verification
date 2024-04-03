@@ -5,8 +5,12 @@ import numpy as np
 import os
 import torch
 import warnings
+from accelerate.utils import tqdm
 from dataclasses import dataclass
 from experiment import Experiment
+from loader import NLICollate, FeverDataset
+from torch.utils.data import DataLoader
+
 
 logging.getLogger("transformers").setLevel(logging.ERROR)
 warnings.filterwarnings('ignore', category=UserWarning, message='TypedStorage is deprecated')
@@ -26,39 +30,24 @@ class RetrieverLoaderParams:
 @dataclass
 class NLILoaderParams:
     dataset_type: str = 'train'
-    num_docs_to_use: int = 8
-    max_sent_per_doc: int = 8
+    num_docs_to_use: int = 4
+    max_sent_per_doc: int = 4
     max_evidence_length: int = 64
     use_gold_as_evidence: bool = True
-    dpr_model_path: str = ''
-    max_evidence_to_retrieve: int = 10
-    device: str = 'cuda:0'
+    dpr_model_path: str = './runs/bm25_dpr_gpt2/retriever/dpr_final.pth'
+    max_evidence_to_retrieve: int = 5
+    truncate_evidence: bool = True
+    device: str = 'cuda:6'
 
-
-# @dataclass
-# class DatasetParams:
-#     num_passages: int = 16
-#     k: int = 8
-
-# @dataclass
-# class DataParams:
-#     bsz: int = 32
-#     train: DatasetParams = DatasetParams(num_passages = 16, k = 8)
-#     val: DatasetParams = DatasetParams(num_passages=16, k=8)
-
-# @dataclass
-# class ModelParams:
-#     num_passages: int = 16
-#     bsz: int = 32
 
 @dataclass
 class TrainingParams:
-    num_epochs: int = 20
+    num_epochs: int = 4
     seed: int = 42
-    bsz: int = 32
+    bsz: int = 16
     lr: float = 1e-5
     log_dir: str = './logs/bm25_dpr_gpt2/'
-    es_step: int = 4
+    es_step: int = 2
     exp_name: str = 'bm25_dpr_gpt2'
 
 def set_seed(seed):
@@ -72,7 +61,6 @@ def set_seed(seed):
 if __name__ == '__main__':
     args = parser.parse_args()
     assert (args.train_retriever ^ args.train_nli), f'Can train only one at a time!'
-
 
     if args.train_retriever:
 # set_seed(training_params.seed)
@@ -89,5 +77,4 @@ if __name__ == '__main__':
         os.makedirs(os.path.join('runs', training_params.exp_name, 'nli'), exist_ok=True)
 
         exp = Experiment(nli_loader_params, training_params, retriever_exp=False)
-
         exp.train()
