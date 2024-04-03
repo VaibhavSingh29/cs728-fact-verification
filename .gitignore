@@ -4,3 +4,4 @@ indexes/
 runs/
 *.ipynb
 *.txt
+results/
