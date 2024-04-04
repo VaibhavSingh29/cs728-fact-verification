@@ -132,12 +132,8 @@ def main():
     wiki_doc_to_lines = pd.read_pickle('save/wiki_mapping.pkl')
     query_file_path = 'data//fever_ner/shared_task_test.jsonl'
     query_df = pd.read_json(query_file_path, lines=True)
-    
-    # query_df = query_df.head(5)
     query_temp_df = query_df.set_index('id')
     qry_collection = query_temp_df.apply(lambda x: (x['claim'], x['tags']), axis=1).to_dict()
-    
-    # qry_collection = query_df.set_index('id')['claim'].to_dict()
     values = list(qry_collection.values())
     claims, _ = zip(*values)
     claims = list(claims)
@@ -158,28 +154,16 @@ def main():
             'sentence': retrieved_sentence_list
         })
         wiki_lines['line_index'] = wiki_lines.groupby('doc_id').cumcount()
-        # wiki_lines = wiki_doc_to_lines[wiki_doc_to_lines['doc_id'].isin(retrieved_docs)]
-        # wiki_lines = wiki_lines.reset_index(drop=True)
-        # wiki_lines['line_index'] = wiki_lines.groupby('doc_id').cumcount()
         sentences = wiki_lines['sentence'].tolist()
         embeddings_list = get_embedding(text=sentences, tokenizer=tokenizer, model=retriever_model, device=device)
         embeddings_tensor = torch.tensor(np.vstack(embeddings_list))
         claim_embedding = torch.tensor(claim_embeddings[idx][None, :])
         wiki_lines['sim_score'] = cosine_similarity(claim_embedding, embeddings_tensor, dim=1, eps=1e-8).tolist()
         wiki_lines = wiki_lines.sort_values(by=['sim_score'], ascending=False)
-        # print(claims[idx])
         dpr_map = wiki_lines.head(2)
-        # dpr_index = create_mips_index(dim=768)
-        # dpr_index.add(np.vstack(embeddings_list))
         
         key = list(qry_collection.keys())[idx]
         claim = claims[idx]
-        # claim_embedding = claim_embeddings[idx]
-        # d, i = dpr_index.search(claim_embedding[None, :], 2)
-        # dpr_sentences = np.squeeze(i).tolist()     
-        
-        # dpr_map = wiki_lines.loc[dpr_sentences]
-        
         evidences = dpr_map['sentence'].tolist()
         concat_evidence = ' '.join(evidences)
         
@@ -187,11 +171,6 @@ def main():
             nli_inputs = [f"{claim} [SEP] [NO_EVIDENCE]"]
         else:
             nli_inputs = [f"{claim} [SEP] {concat_evidence}"]
-        
-    #     # if evidences == []:
-    #     #     nli_inputs = [f"{claim} [SEP] [NO_EVIDENCE]"]
-    #     # else:
-    #     #     nli_inputs = [f"{claim} [SEP] {evidence}" for evidence in evidences]
         
         inputs = get_nli_encodings(inputs=nli_inputs, tokenizer=tokenizer, device=device)
         outputs = nli_model(**inputs).logits
@@ -203,15 +182,11 @@ def main():
         }
         idx2label = {id: label for label, id in label2idx.items()}
         prediction = idx2label[torch.argmax(outputs, dim=1).item()]
-        
-    #     # final_verdict, supporting_indices = aggregate_evidence_with_indices(predictions)
-        
+                
         output_predictions.append(prediction)
         if prediction == 'NOT ENOUGH INFO':
             doc_line_list = []
         else:
-            # dpr_match = [dpr_sentences[idx] for idx in supporting_indices]
-            # selected_cells = dpr_map.loc[dpr_match, ['doc_id', 'line_index']]
             doc_line_list = dpr_map.apply(lambda row: (row['doc_id'], row['line_index']), axis=1).tolist()
 
         claim_result_dict[key] = doc_line_list
@@ -219,8 +194,6 @@ def main():
     query_df['results'] = query_df['id'].map(claim_result_dict)
     query_df['prediction'] = output_predictions
     query_df.to_pickle('save/task_results_new_3.pkl')
-    # print(query_df.sample(5))
-    # print(accuracy_score(query_df['label'], query_df['prediction']))
     
 if __name__ == '__main__':
     main()

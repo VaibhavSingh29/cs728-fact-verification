@@ -133,18 +133,12 @@ def main():
     plt.ylabel('Loss')
     plt.legend()
     plt.grid(True)
-
-    # Specify the filename and the format you wish to save in
     plt.savefig('save/training_and_validation_losses.png', format='png')
 
     
     model_path = 'save/nli_model.pth'
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to disk")
-    
-    # loaded_model = BertForSequenceClassification.from_pretrained(MODEL_NAME, num_labels=NUM_LABELS)
-    # loaded_model.load_state_dict(torch.load(model_path))
-    # print(loaded_model)
 
 if __name__ == '__main__':
     main()

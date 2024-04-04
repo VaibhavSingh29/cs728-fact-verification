@@ -98,11 +98,6 @@ def main():
     model_path = 'save/retrieval_model.pth'
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to disk")
-    
-    # loaded_model = Retriever(MODEL_NAME=MODEL_NAME, return_dense_vector=True)
-    # loaded_model.load_state_dict(torch.load(model_path))
-    # print(loaded_model)
-    
 
 if __name__ == '__main__':
     main()
