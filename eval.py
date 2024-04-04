@@ -34,7 +34,10 @@ def evaluate(loader, fever_ds, params, is_test=False):
         for batch in loader:
             _to_device(batch, eval_params.device)
             predicted_label = [fever_ds.id_to_label[id] for id in nli.predict(batch).tolist()]
-            predicted_evidence = batch['retrieved_evidence']
+            if 'predicted_evidence' in batch:
+                predicted_evidence = batch['retrieved_evidence']
+            else:
+                predicted_evidence = [evidence[:5] for evidence in batch['doc_sent_id_mapping']]
             if not is_test:
                 label = [fever_ds.id_to_label[id] for id in batch['label'].tolist()]
                 evidence = batch['gold_evidence_original']
@@ -81,19 +84,22 @@ def evaluate(loader, fever_ds, params, is_test=False):
 class EvalParams():
     exp_name: str = 'runs/bm25_dpr_gpt2/'
     bsz: int = 32
-    device: str = 'cuda:3'
+    device: str = 'cuda:4'
 
 if __name__ == '__main__':
     args = parser.parse_args()
     eval_params = EvalParams()
     loader_params = NLILoaderParams(
-        dataset_type='val',
-        num_docs_to_use=8,
-        max_sent_per_doc=8,
-        use_gold_as_evidence=False,
-        max_evidence_to_retrieve=16,
-        dpr_model_path=os.path.join(eval_params.exp_name, 'retriever/dpr_final.pth'),
-        device='cuda:2',
+        dataset_type = 'val',
+        num_docs_to_use = 10,
+        max_sent_per_doc = 16,
+        max_evidence_length = 64,
+        use_gold_as_evidence = True,
+        dpr_model_path = './runs/bm25_dpr_gpt2/retriever/dpr_final.pth',
+        max_evidence_to_retrieve = 5,
+        truncate_evidence = True,
+        device = 'cuda:6',
+        use_ner = True
     )
 
     # load dataset
@@ -104,7 +110,7 @@ if __name__ == '__main__':
     # make dataloader
     collate_fn = NLICollate(loader_params)
     val_loader = DataLoader(fever_val, batch_size=eval_params.bsz, collate_fn=collate_fn, shuffle=False)
-    test_loader = DataLoader(fever_test, batch_size=eval_params.bsz, collate_fn=collate_fn, shuffle=False)
+    # test_loader = DataLoader(fever_test, batch_size=eval_params.bsz, collate_fn=collate_fn, shuffle=False)
 
     # NLI model
     nli = NLI().to(eval_params.device)
@@ -113,8 +119,8 @@ if __name__ == '__main__':
     if not args.test_only: 
         print('=============================== VALIDATION ===============================')
         evaluate(val_loader, fever_val, eval_params, is_test=False)
-        print('=============================== TEST ===============================')
-    evaluate(test_loader, fever_test, eval_params, is_test=True)
+    # print('=============================== TEST ===============================')
+    # evaluate(test_loader, fever_test, eval_params, is_test=True)
 
     
     

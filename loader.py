@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from dpr import DPR
 from itertools import chain
 from pyserini.search.lucene import LuceneSearcher
+from sparse_retriever import SparseRetriever
 from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
 from transformers import AutoTokenizer, DPRContextEncoderTokenizer, DPRQuestionEncoderTokenizer
@@ -18,6 +19,7 @@ class FeverDataset(Dataset):
         self.num_docs_to_use = params.num_docs_to_use
         self.max_sent_per_doc = params.max_sent_per_doc
         self.max_evidence_to_retrieve = params.max_evidence_to_retrieve
+        self.use_ner = params.use_ner
         if self.type == 'train':
             with open('./data/fever/train.jsonl', 'r', encoding='utf-8') as f:
                 self.data = [json.loads(line) for line in f]
@@ -35,16 +37,20 @@ class FeverDataset(Dataset):
         }
         self.id_to_label = {v:k for k,v in self.label_to_id.items()}
 
-        self.searcher = LuceneSearcher('indexes/wiki-pages/')
+        if self.use_ner:
+            self.searcher = LuceneSearcher('indexes/wiki-pages/')
+        else:
+            self.searcher = SparseRetriever()
         
     def __getitem__(self, index):
         instance = self.data[index]
 
         claim = instance['claim']
-
+        tags = instance["tags"]
         if self.type == 'test':
             return {
                 'claim': claim,
+                'tags': tags if self.use_ner else None
             }
         
         if self.type == 'val':
@@ -60,6 +66,7 @@ class FeverDataset(Dataset):
     
         return {
             'claim': claim,
+            'tags': tags if self.use_ner else None,
             'label': label,
             'gold_evidence_original': instance['evidence'],
             **evidence
@@ -131,8 +138,12 @@ class NLICollate():
         self.max_evidence_length = params.max_evidence_length
         self.max_evidence_to_retrieve = params.max_evidence_to_retrieve
         self.truncate_evidence = params.truncate_evidence
+        self.use_ner = params.use_ner
         if not self.use_gold_as_evidence:
-            self.first_stage_retriever = LuceneSearcher('indexes/wiki-pages')              
+            if self.use_ner:
+                self.first_stage_retriever = SparseRetriever()
+            else:
+                self.first_stage_retriever = LuceneSearcher('indexes/wiki-pages')              
             self.second_stage_retriever = DPR().to(params.device)
             self.second_stage_retriever.load_state_dict(torch.load(params.dpr_model_path))
             self.tokenize_retriever_batch = RetrieverCollate().tokenize_batch
@@ -171,8 +182,11 @@ class NLICollate():
         )
         return inputs
     
-    def retrieve_evidence(self, claim):
-        batch_hits = self.first_stage_retriever.batch_search(queries=claim, qids=[str(i) for i in range(len(claim))], k=self.num_docs_to_use)
+    def retrieve_evidence(self, claim, tag=None):
+        if self.use_ner:
+            batch_hits = self.first_stage_retriever.batch_search(queries=claim, tags=tag, qids=[str(i) for i in range(len(claim))], k=self.num_docs_to_use)
+        else:
+            batch_hits = self.first_stage_retriever.batch_search(queries=claim, qids=[str(i) for i in range(len(claim))], k=self.num_docs_to_use)
 
         mapping = []
         sentences = []
@@ -231,13 +245,17 @@ class NLICollate():
         claim = [
             inst['claim'] for inst in batch
         ]
+        tag = [
+            inst['tags'] for inst in batch
+        ]
         if self.use_gold_as_evidence:
             sentences = [
                 inst['sentences'] for inst in batch
             ]
             tokenized_input = self.tokenize_batch(claim, sentences)
+           
         else:
-            sentences, batch_topk = self.retrieve_evidence(claim)
+            sentences, batch_topk = self.retrieve_evidence(claim, tag)
             tokenized_input = self.tokenize_batch(claim, sentences)
             processed_batch['retrieved_evidence'] = batch_topk
             
@@ -533,20 +551,25 @@ if __name__ == '__main__':
 
     @dataclass
     class NLILoaderParams:
-        dataset_type: str = 'train'
-        num_docs_to_use: int = 4
-        max_sent_per_doc: int = 4
+        dataset_type: str = 'val'
+        num_docs_to_use: int = 3
+        max_sent_per_doc: int = 8
         max_evidence_length: int = 64
-        use_gold_as_evidence: bool = True
+        use_gold_as_evidence: bool = False
         dpr_model_path: str = './runs/bm25_dpr_gpt2/retriever/dpr_final.pth'
         max_evidence_to_retrieve: int = 5
-        truncate_evidence: bool = False
+        truncate_evidence: bool = True
         device: str = 'cuda:6'
+        use_ner: bool = True
 
     params = NLILoaderParams()
     from torch.utils.data import DataLoader
+    i = 0
     loader = DataLoader(FeverDataset(params), batch_size=4, collate_fn=NLICollate(params)) 
     for batch in loader:
-        print(batch)
-        break       
+        pprint(batch['retrieved_evidence'])
+        pprint(batch['gold_evidence_original'])
+        if i > 2:
+            break
+        i += 1   
     

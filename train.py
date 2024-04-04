@@ -26,6 +26,7 @@ class RetrieverLoaderParams:
     num_negatives: int = 1
     num_docs_to_retrieve: int = 8
     max_sent_per_doc: int = 8
+    use_ner: bool = True
 
 @dataclass
 class NLILoaderParams:
@@ -38,6 +39,7 @@ class NLILoaderParams:
     max_evidence_to_retrieve: int = 5
     truncate_evidence: bool = True
     device: str = 'cuda:6'
+    use_ner: bool = True
 
 
 @dataclass
