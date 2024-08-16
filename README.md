@@ -1,3 +1,5 @@
+# TEAM: AFRIN DANGE(22M2161), VAIBHAV SINGH(22M0827)
+
 # Fact Verification using Two Stage Retriever with GPT2 
 
 To run the code:
